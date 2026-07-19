@@ -1,0 +1,133 @@
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import logo from "../assets/logo.webp";
+import buymecoffee from "../assets/buymeacoffee.webp";
+
+function Navbar() {
+  const [isOpen, setIsOpen] = useState(false);
+
+  const navItems = ["Home", "Contact Us", "Feedback", "About Us"];
+
+  return (
+    <nav className="sticky top-0 z-50 w-full h-max bg-[#000000]/90 backdrop-blur-md border-b border-[#cb2957]/20 shadow-[0_4px_30px_-5px_rgba(203,41,87,0.3)]">
+      <div className="max-w-7xl mx-auto px-6 md:px-8 lg:px-16 py-4 flex justify-between items-center">
+        <motion.div
+          initial={{ opacity: 0, x: -20 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.5 }}
+          className="flex items-center cursor-pointer"
+        >
+          <img
+            src={logo}
+            alt="NullBG"
+            className="object-contain w-10 md:w-12 mr-3 inline"
+          />
+          <span className="text-2xl md:text-3xl font-black text-[#cb2957] tracking-wide">
+            NullBG
+          </span>
+        </motion.div>
+
+        <div className="hidden md:flex items-center space-x-12">
+          <ul className="flex space-x-10">
+            {navItems.map((item, index) => (
+              <motion.li
+                key={index}
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, delay: index * 0.1 }}
+                whileHover={{ scale: 1.05 }}
+                className="text-[#dddddd] font-semibold text-sm uppercase tracking-widest cursor-pointer transition-colors duration-300 hover:text-[#cb2957]"
+              >
+                {item}
+              </motion.li>
+            ))}
+          </ul>
+          <motion.div
+            whileHover={{
+              rotate: [-15, 15, -15],
+              transition: {
+                duration: 0.5,
+                repeat: Infinity,
+                ease: "easeInOut",
+              },
+            }}
+            animate={{ rotate: 0 }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
+          >
+            <img
+              src={buymecoffee}
+              alt="buymeacoffee"
+              className="h-8 brightness-125"
+            />
+          </motion.div>
+        </div>
+
+        <div className="md:hidden flex items-center">
+          <img
+            src={buymecoffee}
+            alt="buymeacoffee"
+            className="w-7 mr-6 cursor-pointer hover:scale-110 brightness-125"
+          />
+          <button
+            onClick={() => setIsOpen(!isOpen)}
+            className="text-[#eeeeee] focus:outline-none"
+          >
+            <svg
+              className="w-8 h-8"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              {isOpen ? (
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M6 18L18 6M6 6l12 12"
+                />
+              ) : (
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 6h16M4 12h16M4 18h16"
+                />
+              )}
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "calc(100vh - 72px)" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="md:hidden absolute flex w-full top-full left-0 items-center justify-center bg-[#000000]/90 backdrop-blur-3xl border-t border-[#cb2957]/20 overflow-hidden z-20"
+          >
+            <ul className="flex flex-col items-center py-6 space-y-6">
+              {navItems.map((item, index) => (
+                <motion.li
+                  key={index}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.3, delay: index * 0.1 }}
+                  whileHover={{ scale: 1.1 }}
+                  onClick={() => setIsOpen(false)}
+                  className="text-[#dddddd] bg-[#000000]/95 font-semibold text-lg uppercase tracking-widest cursor-pointer hover:text-[#cb2957] transition-colors duration-300 border-b border-white"
+                >
+                  {item}
+                </motion.li>
+              ))}
+            </ul>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </nav>
+  );
+}
+
+export default Navbar;
