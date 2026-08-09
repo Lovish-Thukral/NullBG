@@ -4,7 +4,7 @@ import { ImageContext } from "./ImageContext";
 export default function ImageProvider({ children }) {
   const [imageMap, setImageMap] = useState(new Map());
 
-  const addImage = (file, key) => {
+  const addImage = (key, file) => {
     if (imageMap.has(key)) {
       alert("image already exists");
       return;
@@ -12,7 +12,7 @@ export default function ImageProvider({ children }) {
     setImageMap((prev) => {
       const next = new Map(prev);
       next.set(key, {
-        file,
+        file: file,
         status: "pending",
         preview: URL.createObjectURL(file),
         resultBlob: null,
@@ -58,10 +58,10 @@ export default function ImageProvider({ children }) {
   return (
     <ImageContext.Provider
       value={{
-        imageMap : imageMap,
-        addImage : addImage,
-        removeImage : removeImage,
-        updateImageStatus : updateImageStatus
+        imageMap: imageMap,
+        addImage: addImage,
+        removeImage: removeImage,
+        updateImageStatus: updateImageStatus,
       }}
     >
       {children}

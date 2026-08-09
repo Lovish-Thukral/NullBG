@@ -9,7 +9,7 @@ function Navbar() {
   const navItems = ["Home", "Contact Us", "Feedback", "About Us"];
 
   return (
-    <nav className="sticky top-0 z-50 w-full h-max bg-[#000000]/90 backdrop-blur-md border-b border-[#cb2957]/20 shadow-[0_4px_30px_-5px_rgba(203,41,87,0.3)]">
+    <nav className="sticky top-0 z-50 w-full h-max backdrop-blur-md border-b border-[#cb2957]/20 shadow-[0_4px_30px_-5px_rgba(203,41,87,0.3)]">
       <div className="max-w-7xl mx-auto px-6 md:px-8 lg:px-16 py-4 flex justify-between items-center">
         <motion.div
           initial={{ opacity: 0, x: -20 }}

@@ -7,12 +7,14 @@ import { div } from "motion/react-client";
 
 export default function App() {
   return (
-    <div className="flex flex-col min-h-screen relative overflow-x-hidden ">
+    <>
       <MainBackground />
-      <Navbar />
-      <ImageProvider>
-        <Hero />
-      </ImageProvider>
-    </div>
+      <div className="flex flex-col min-h-screen relative overflow-x-hidden ">
+        <Navbar />
+        <ImageProvider>
+          <Hero />
+        </ImageProvider>
+      </div>
+    </>
   );
 }
