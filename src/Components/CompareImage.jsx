@@ -2,7 +2,7 @@ import { motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import before from "../assets/noremove.jpg";
 
-export function CompareImage(beforeImage = null, afterImage = null ) {
+export function CompareImage({beforeImage = null, afterImage = null} ) {
   const [position, setPosition] = useState(50);
   const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef(null);

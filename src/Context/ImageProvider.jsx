@@ -16,6 +16,7 @@ export default function ImageProvider({ children }) {
         status: "pending",
         preview: URL.createObjectURL(file),
         resultBlob: null,
+        resultUrl: null,
       });
       return next;
     });
@@ -29,6 +30,9 @@ export default function ImageProvider({ children }) {
 
       if (image?.preview) {
         URL.revokeObjectURL(image.preview);
+      }
+      if (image?.resultUrl) {
+        URL.revokeObjectURL(image.resultUrl);
       }
 
       next.delete(key);
@@ -45,10 +49,19 @@ export default function ImageProvider({ children }) {
 
       if (!image) return prev;
 
+      // revoke any previous result URL before creating a new one, so we
+      // don't leak blob URLs if this image gets reprocessed
+      if (image.resultUrl) {
+        URL.revokeObjectURL(image.resultUrl);
+      }
+
+      const resultUrl = resultBlob ? URL.createObjectURL(resultBlob) : null;
+
       next.set(key, {
         ...image,
         status,
         resultBlob,
+        resultUrl,
       });
 
       return next;

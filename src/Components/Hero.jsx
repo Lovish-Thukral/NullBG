@@ -26,7 +26,8 @@ export default function Hero() {
     useContext(ImageContext);
 
   const [isProcessing, setIsProcessing] = useState(false);
-  const [currentImage, setCurrentImage] = useState(null);
+  const [selectedPath, setSelectedPath] = useState(null);
+  const [viewMode, setViewMode] = useState("removed"); // "removed" | "original" | "compare"
   const loadingRef = useRef(false);
   const modelRef = useRef(null);
 
@@ -44,15 +45,15 @@ export default function Hero() {
       acceptedFiles.forEach((file) => {
         const path = `${file.path} ${file.lastModified}`;
         addImage(path, file);
+        // auto-select the first dropped image if nothing is selected yet
+        setSelectedPath((prev) => prev ?? path);
       });
     },
   });
 
+  // Load model once
   useEffect(() => {
-    if (loadingRef.current || modelRef.current) {
-      return;
-    }
-
+    if (loadingRef.current || modelRef.current) return;
     loadingRef.current = true;
 
     const load = async () => {
@@ -63,7 +64,6 @@ export default function Hero() {
         if (session) {
           modelRef.current = session;
           setloadedmodel(true);
-          console.log("Model Loaded:", session);
         }
       } catch (err) {
         console.error("Failed to load model:", err);
@@ -75,36 +75,76 @@ export default function Hero() {
     load();
   }, []);
 
+  // Process images one at a time, in the order they were added
   useEffect(() => {
-    if (isProcessing) return;
-    if (imageMap.size === 0 || !loadedModel) return;
+    if (isProcessing || !loadedModel || imageMap.size === 0) return;
 
     const pendingEntry = Array.from(imageMap.entries()).find(
       ([, image]) => image.status === "pending",
     );
-
     if (!pendingEntry) return;
+
     const [path, image] = pendingEntry;
 
     setIsProcessing(true);
-    setCurrentImage(image);
     updateImageStatus(path, "processing");
-    
-    const process = async () => {
+
+    (async () => {
       try {
-        const mask = await modelRef.current.preprocess(image.file);
-        console.log("Mask generated for", path, mask);
-        updateImageStatus(path, "completed", mask);
+        const resultBlob = await modelRef.current.remove(image.file);
+        updateImageStatus(path, "completed", resultBlob);
       } catch (error) {
-        console.error("Error processing image:", error);
+        console.error("Error processing image:", path, error);
         updateImageStatus(path, "error");
       } finally {
         setIsProcessing(false);
       }
-    };
-    
-    process();
-  }, [imageMap, loadedModel, isProcessing]);
+    })();
+  }, [imageMap, loadedModel, isProcessing, updateImageStatus]);
+
+  // Keep selection valid if the selected image gets removed
+  useEffect(() => {
+    if (imageMap.size === 0) {
+      setSelectedPath(null);
+      return;
+    }
+    if (!selectedPath || !imageMap.has(selectedPath)) {
+      setSelectedPath(Array.from(imageMap.keys())[0]);
+    }
+  }, [imageMap, selectedPath]);
+
+  const handleSelect = (path) => {
+    setSelectedPath(path);
+    setViewMode("removed");
+  };
+
+  const selectedImage = selectedPath ? imageMap.get(selectedPath) : null;
+
+  const handleDownload = () => {
+    if (!selectedImage?.resultBlob) return;
+    const a = document.createElement("a");
+    a.href = selectedImage.resultUrl;
+    a.download = `removed-bg-${selectedPath.split(" ")[0].split("/").pop() || "image"}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const handleShare = async () => {
+    if (!selectedImage?.resultBlob) return;
+    const file = new File([selectedImage.resultBlob], "image.png", {
+      type: "image/png",
+    });
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+      } catch {
+        // user cancelled share sheet, ignore
+      }
+    } else {
+      handleDownload();
+    }
+  };
 
   function OriginalHero() {
     return (
@@ -182,106 +222,306 @@ export default function Hero() {
     );
   }
 
-  function RemovalHeroScreen() {
-    const ImageOption = {
-      Original: original,
-      Removed: removed,
-      "Add Image": addimage,
-      Share: share,
-      Compare: compare,
-    };
-
-    const optionEntries = Object.entries(ImageOption);
+  function OptionsBar() {
     return (
-      <div className="flex justify-center items-center w-full z-20 mt-10 px-4 md:px-0">
-        <div className="flex flex-row items-center justify-between w-full max-w-5xl rounded-full border border-[#cb2957]/30 bg-[#000000]/80 backdrop-blur-xl p-2 md:px-4 shadow-[0_10px_30px_rgba(0,0,0,0.8)] ring-1 ring-[#cb2957]/10">
-          <button className="order-1 md:order-3 flex-shrink-0 flex items-center justify-center bg-[#cb2957] text-[#eeeeee] p-3 md:px-6 md:py-2.5 rounded-full hover:bg-[#a82046] hover:shadow-[0_0_20px_rgba(203,41,87,0.4)] hover:scale-105 transition-all duration-300 md:ml-8">
-            {/* Download SVG */}
+      <div className="flex flex-row items-center justify-between w-full max-w-5xl rounded-full border border-[#cb2957]/30 bg-[#000000]/80 backdrop-blur-xl p-2 md:px-4 shadow-[0_10px_30px_rgba(0,0,0,0.8)] ring-1 ring-[#cb2957]/10">
+        <button
+          onClick={handleDownload}
+          disabled={selectedImage?.status !== "completed"}
+          className="order-1 md:order-3 flex-shrink-0 flex items-center justify-center bg-[#cb2957] text-[#eeeeee] p-3 md:px-6 md:py-2.5 rounded-full hover:bg-[#a82046] hover:shadow-[0_0_20px_rgba(203,41,87,0.4)] hover:scale-105 transition-all duration-300 md:ml-8 disabled:opacity-40 disabled:hover:scale-100 disabled:hover:shadow-none disabled:cursor-not-allowed"
+        >
+          <svg
+            className="w-5 h-5 md:mr-2"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+            />
+          </svg>
+          <span className="hidden md:inline font-semibold tracking-wide">
+            Download
+          </span>
+        </button>
+
+        <div className="order-2 md:order-1 flex-1 overflow-x-auto no-scrollbar relative flex items-center ml-3 md:ml-0 mr-1 md:mr-0">
+          <ul className="flex flex-row items-center w-max pr-8 md:pr-0">
+            <li className="flex flex-row items-center">
+              <button
+                onClick={() => setViewMode("removed")}
+                disabled={selectedImage?.status !== "completed"}
+                className={`flex flex-row items-center justify-center cursor-pointer transition-all duration-300 group whitespace-nowrap px-3 py-2 rounded-full hover:bg-[#eeeeee]/10 disabled:opacity-40 disabled:cursor-not-allowed ${
+                  viewMode === "removed" ? "text-[#cb2957]" : "text-[#dddddd]"
+                }`}
+              >
+                <img
+                  src={removed}
+                  alt="Removed"
+                  className="h-4 w-4 md:h-5 md:w-5 object-contain mr-2 md:mr-2.5 invert opacity-70 group-hover:opacity-100 transition-all duration-300"
+                />
+                <span className="text-xs md:text-sm font-semibold tracking-wide">
+                  Removed
+                </span>
+              </button>
+              <div className="h-6 w-[1px] bg-[#dddddd]/20 mx-2 md:mx-6 flex-shrink-0" />
+            </li>
+
+            <li className="flex flex-row items-center">
+              <button
+                onClick={() => setViewMode("original")}
+                className={`flex flex-row items-center justify-center cursor-pointer transition-all duration-300 group whitespace-nowrap px-3 py-2 rounded-full hover:bg-[#eeeeee]/10 ${
+                  viewMode === "original" ? "text-[#cb2957]" : "text-[#dddddd]"
+                }`}
+              >
+                <img
+                  src={original}
+                  alt="Original"
+                  className="h-4 w-4 md:h-5 md:w-5 object-contain mr-2 md:mr-2.5 invert opacity-70 group-hover:opacity-100 transition-all duration-300"
+                />
+                <span className="text-xs md:text-sm font-semibold tracking-wide">
+                  Original
+                </span>
+              </button>
+              <div className="h-6 w-[1px] bg-[#dddddd]/20 mx-2 md:mx-6 flex-shrink-0" />
+            </li>
+
+            <li className="flex flex-row items-center">
+              <button
+                onClick={open}
+                className="flex flex-row items-center justify-center cursor-pointer transition-all duration-300 group whitespace-nowrap text-[#dddddd] px-3 py-2 rounded-full hover:bg-[#eeeeee]/10"
+              >
+                <img
+                  src={addimage}
+                  alt="Add Image"
+                  className="h-4 w-4 md:h-5 md:w-5 object-contain mr-2 md:mr-2.5 invert opacity-70 group-hover:opacity-100 transition-all duration-300"
+                />
+                <span className="text-xs md:text-sm font-semibold tracking-wide group-hover:text-[#cb2957] transition-colors duration-300">
+                  Add Image
+                </span>
+              </button>
+              <div className="h-6 w-[1px] bg-[#dddddd]/20 mx-2 md:mx-6 flex-shrink-0" />
+            </li>
+
+            <li className="flex flex-row items-center">
+              <button
+                onClick={handleShare}
+                disabled={selectedImage?.status !== "completed"}
+                className="flex flex-row items-center justify-center cursor-pointer transition-all duration-300 group whitespace-nowrap text-[#dddddd] px-3 py-2 rounded-full hover:bg-[#eeeeee]/10 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <img
+                  src={share}
+                  alt="Share"
+                  className="h-4 w-4 md:h-5 md:w-5 object-contain mr-2 md:mr-2.5 invert opacity-70 group-hover:opacity-100 transition-all duration-300"
+                />
+                <span className="text-xs md:text-sm font-semibold tracking-wide group-hover:text-[#cb2957] transition-colors duration-300">
+                  Share
+                </span>
+              </button>
+              <div className="h-6 w-[1px] bg-[#dddddd]/20 mx-2 md:mx-6 flex-shrink-0" />
+            </li>
+
+            <li className="flex flex-row items-center">
+              <button
+                onClick={() => setViewMode("compare")}
+                disabled={selectedImage?.status !== "completed"}
+                className={`flex flex-row items-center justify-center cursor-pointer transition-all duration-300 group whitespace-nowrap px-3 py-2 rounded-full hover:bg-[#eeeeee]/10 disabled:opacity-40 disabled:cursor-not-allowed ${
+                  viewMode === "compare" ? "text-[#cb2957]" : "text-[#dddddd]"
+                }`}
+              >
+                <img
+                  src={compare}
+                  alt="Compare"
+                  className="h-4 w-4 md:h-5 md:w-5 object-contain mr-2 md:mr-2.5 invert opacity-70 group-hover:opacity-100 transition-all duration-300"
+                />
+                <span className="text-xs md:text-sm font-semibold tracking-wide group-hover:text-[#cb2957] transition-colors duration-300">
+                  Compare
+                </span>
+              </button>
+            </li>
+          </ul>
+          <div className="md:hidden sticky right-0 top-0 bottom-0 flex items-center justify-center pl-2 pr-1 bg-gradient-to-l from-black via-black/90 to-transparent pointer-events-none">
             <svg
-              className="w-5 h-5 md:mr-2"
+              className="w-5 h-5 text-[#cb2957] animate-pulse"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
             >
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                strokeWidth={2.5}
+                d="M9 5l7 7-7 7"
               />
             </svg>
-            {/* Text hidden on mobile, visible on medium+ screens */}
-            <span className="hidden md:inline font-semibold tracking-wide">
-              Download
-            </span>
-          </button>
-
-          <div className="order-2 md:order-1 flex-1 overflow-x-auto no-scrollbar relative flex items-center ml-3 md:ml-0 mr-1 md:mr-0">
-            <ul className="flex flex-row items-center w-max pr-8 md:pr-0">
-              {optionEntries.map(([key, item], index) => (
-                <li key={key} className="flex flex-row items-center">
-                  <button
-                    onClick={open}
-                    className="flex flex-row items-center justify-center cursor-pointer transition-all duration-300 group whitespace-nowrap text-[#dddddd] px-3 py-2 rounded-full hover:bg-[#eeeeee]/10"
-                  >
-                    <img
-                      src={item}
-                      alt={key}
-                      className="h-4 w-4 md:h-5 md:w-5 object-contain mr-2 md:mr-2.5 invert opacity-70 group-hover:opacity-100 transition-all duration-300"
-                    />
-                    <span className="text-xs md:text-sm font-semibold tracking-wide group-hover:text-[#cb2957] transition-colors duration-300">
-                      {key}
-                    </span>
-                  </button>
-                  {index === 2 && (
-                    <div className="h-6 w-[1px] bg-[#dddddd]/20 mx-2 md:mx-6 flex-shrink-0" />
-                  )}
-                </li>
-              ))}
-            </ul>
-            <div className="md:hidden sticky right-0 top-0 bottom-0 flex items-center justify-center pl-2 pr-1 bg-gradient-to-l from-black via-black/90 to-transparent pointer-events-none">
-              <svg
-                className="w-5 h-5 text-[#cb2957] animate-pulse"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2.5}
-                  d="M9 5l7 7-7 7"
-                />
-              </svg>
-            </div>
           </div>
-          <div></div>
         </div>
+      </div>
+    );
+  }
 
-        <div>
-          {imageMap.size != 0 && (
-            <div>
-              {
-                currentImage && (
-                  <img src={currentImage.preview} />
-                )
-              }
-            </div>
-          )}
+  function CenterPreview() {
+    if (!selectedImage) return null;
+
+    const isCompleted = selectedImage.status === "completed";
+    const originalSrc = selectedImage.preview;
+    const removedSrc = selectedImage.resultUrl;
+
+    let content;
+    if (viewMode === "compare" && isCompleted && originalSrc && removedSrc) {
+      content = (
+        // Added bg-white and overflow-hidden to keep the rounded corners clean
+        <div className="w-full h-full flex items-center justify-center bg-white rounded-3xl overflow-hidden">
+          <CompareImage beforeImage={originalSrc} afterImage={removedSrc} />
         </div>
+      );
+    } else if (viewMode === "removed" && isCompleted && removedSrc) {
+      content = (
+        <img
+          src={removedSrc}
+          alt="Background removed"
+          // Replaced bg-amber-50 with bg-white
+          className="w-full h-full object-contain rounded-3xl bg-white"
+        />
+      );
+    } else {
+      content = (
+        <img
+          src={originalSrc}
+          alt="Original"
+          // Added bg-white to the original image so toggling views feels seamless
+          className="w-full h-full object-contain rounded-3xl bg-white"
+        />
+      );
+    }
+
+    return (
+      <div className="relative flex-1 flex items-center justify-center w-full max-w-5xl mx-auto my-6 min-h-0">
+        {content}
+
+        {selectedImage.status === "processing" && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 rounded-3xl backdrop-blur-sm z-10">
+            <div className="h-10 w-10 border-4 border-[#cb2957] border-t-transparent rounded-full animate-spin" />
+            <span className="mt-4 text-sm font-semibold tracking-wide text-[#eeeeee]">
+              Removing background...
+            </span>
+          </div>
+        )}
+
+        {selectedImage.status === "error" && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 rounded-3xl z-10">
+            <span className="text-sm font-semibold text-red-400">
+              Failed to process this image
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function ThumbnailStrip() {
+    const entries = Array.from(imageMap.entries());
+    if (entries.length === 0) return null;
+
+    return (
+      <div className="w-full max-w-3xl mx-auto mt-8 px-4">
+        <div className="flex flex-row items-center gap-3 overflow-x-auto no-scrollbar pb-2">
+          {entries.map(([path, image]) => {
+            const isSelected = path === selectedPath;
+            const thumbSrc = image.resultUrl || image.preview;
+
+            return (
+              <div
+                key={path}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleSelect(path)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") handleSelect(path);
+                }}
+                className={`relative flex-shrink-0 h-16 w-16 md:h-20 md:w-20 rounded-2xl overflow-hidden border-2 cursor-pointer transition-all duration-200 ${
+                  isSelected
+                    ? "border-[#cb2957] scale-105 shadow-[0_0_15px_rgba(203,41,87,0.4)]"
+                    : "border-[#dddddd]/15 hover:border-[#dddddd]/40"
+                }`}
+              >
+                <img
+                  src={thumbSrc}
+                  alt=""
+                  className="h-full w-full object-cover"
+                />
+
+                {image.status === "processing" && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                    <div className="h-4 w-4 border-2 border-[#eeeeee] border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )}
+
+                {image.status === "error" && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-red-900/50">
+                    <span className="text-[10px] font-bold text-red-200">
+                      !
+                    </span>
+                  </div>
+                )}
+
+                {image.status === "pending" && (
+                  <div className="absolute inset-0 bg-black/40" />
+                )}
+
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeImage(path);
+                  }}
+                  className="absolute top-0.5 right-0.5 h-4 w-4 rounded-full bg-black/70 text-[#eeeeee] text-[10px] flex items-center justify-center hover:bg-[#cb2957] transition-colors"
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+
+          {/* add-more thumbnail */}
+          <button
+            onClick={open}
+            className="flex-shrink-0 h-16 w-16 md:h-20 md:w-20 rounded-2xl border-2 border-dashed border-[#dddddd]/20 hover:border-[#cb2957]/50 flex items-center justify-center transition-colors duration-200"
+          >
+            <img
+              src={addimage}
+              alt="Add"
+              className="h-6 w-6 invert opacity-60"
+            />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function RemovalHeroScreen() {
+    return (
+      // Added flex-1 and h-full so the entire removal screen takes up 100% of the parent's height
+      <div className="flex flex-col items-center w-full h-full flex-1 z-20 pt-8 pb-4 px-4 md:px-8 min-h-0">
+        <OptionsBar />
+        <CenterPreview />
+        <ThumbnailStrip />
       </div>
     );
   }
 
   return (
     <section
-      className="relative w-full min-h-[90vh] flex flex-col items-center text-[#eeeeee] overflow-hidden selection:bg-[#cb2957]/40"
+      // Added h-screen to strictly enforce viewport height
+      className="relative w-full min-h-[90vh] h-screen flex flex-col items-center text-[#eeeeee] overflow-hidden selection:bg-[#cb2957]/40"
       {...getRootProps()}
     >
       <input {...getInputProps()} />
 
-      {imageMap.size != 0 ? <RemovalHeroScreen /> : <OriginalHero />}
+      {imageMap.size !== 0 ? <RemovalHeroScreen /> : <OriginalHero />}
     </section>
   );
 }
