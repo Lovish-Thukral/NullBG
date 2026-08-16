@@ -27,7 +27,7 @@ export default function Hero() {
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedPath, setSelectedPath] = useState(null);
-  const [viewMode, setViewMode] = useState("removed"); // "removed" | "original" | "compare"
+  const [viewMode, setViewMode] = useState("compare"); // "removed" | "original" | "compare"
   const loadingRef = useRef(false);
   const modelRef = useRef(null);
 
@@ -62,6 +62,7 @@ export default function Hero() {
         const session = await Model.create(gpuSupported);
 
         if (session) {
+
           modelRef.current = session;
           setloadedmodel(true);
         }
@@ -91,8 +92,8 @@ export default function Hero() {
 
     (async () => {
       try {
-        const resultBlob = await modelRef.current.remove(image.file);
-        updateImageStatus(path, "completed", resultBlob);
+        const resultBlob = await modelRef.current.removeWithDebug(image.file);
+        updateImageStatus(path, "completed", resultBlob.result);
       } catch (error) {
         console.error("Error processing image:", path, error);
         updateImageStatus(path, "error");
@@ -216,7 +217,7 @@ export default function Hero() {
         </div>
 
         <div className="order-2 flex justify-center w-full">
-          {CompareImage()}
+          <CompareImage />
         </div>
       </div>
     );
@@ -372,40 +373,106 @@ export default function Hero() {
     const removedSrc = selectedImage.resultUrl;
 
     let content;
+
     if (viewMode === "compare" && isCompleted && originalSrc && removedSrc) {
       content = (
-        // Added bg-white and overflow-hidden to keep the rounded corners clean
-        <div className="w-full h-full flex items-center justify-center bg-white rounded-3xl overflow-hidden">
-          <CompareImage beforeImage={originalSrc} afterImage={removedSrc} />
-        </div>
+        <CompareImage beforeImage={originalSrc} afterImage={removedSrc} />
       );
     } else if (viewMode === "removed" && isCompleted && removedSrc) {
       content = (
-        <img
-          src={removedSrc}
-          alt="Background removed"
-          // Replaced bg-amber-50 with bg-white
-          className="w-full h-full object-contain rounded-3xl bg-white"
-        />
+        <div
+          className="
+          w-full
+          h-full
+          flex
+          items-center
+          justify-center
+          rounded-3xl
+          overflow-hidden
+          bg-white
+        "
+        >
+          <img
+            src={removedSrc}
+            alt="Background removed"
+            className="
+            max-w-full
+            max-h-full
+            w-auto
+            h-auto
+            object-contain
+            rounded-3xl
+          "
+          />
+        </div>
       );
     } else {
       content = (
-        <img
-          src={originalSrc}
-          alt="Original"
-          // Added bg-white to the original image so toggling views feels seamless
-          className="w-full h-full object-contain rounded-3xl bg-white"
-        />
+        <div
+          className="
+          w-full
+          h-full
+          flex
+          items-center
+          justify-center
+          rounded-3xl
+          overflow-hidden
+          bg-white
+        "
+        >
+          <img
+            src={originalSrc}
+            alt="Original"
+            className="
+            max-w-full
+            max-h-full
+            w-auto
+            h-auto
+            object-contain
+            rounded-3xl
+          "
+          />
+        </div>
       );
     }
 
     return (
-      <div className="relative flex-1 flex items-center justify-center w-full max-w-5xl mx-auto my-6 min-h-0">
+      <div
+        className="
+        relative
+        w-full
+        max-w-6xl
+        flex-1
+        min-h-0
+        min-w-0
+        flex
+        items-center
+        justify-center
+        px-2
+        sm:px-4
+        py-4
+        overflow-hidden
+      "
+      >
         {content}
 
         {selectedImage.status === "processing" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 rounded-3xl backdrop-blur-sm z-10">
+          <div
+            className="
+            absolute
+            inset-0
+            flex
+            flex-col
+            items-center
+            justify-center
+            bg-black/60
+            rounded-3xl
+            backdrop-blur-sm
+            z-30
+          "
+          >
             <div className="h-10 w-10 border-4 border-[#cb2957] border-t-transparent rounded-full animate-spin" />
+
             <span className="mt-4 text-sm font-semibold tracking-wide text-[#eeeeee]">
               Removing background...
             </span>
@@ -413,7 +480,19 @@ export default function Hero() {
         )}
 
         {selectedImage.status === "error" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 rounded-3xl z-10">
+          <div
+            className="
+            absolute
+            inset-0
+            flex
+            flex-col
+            items-center
+            justify-center
+            bg-black/70
+            rounded-3xl
+            z-30
+          "
+          >
             <span className="text-sm font-semibold text-red-400">
               Failed to process this image
             </span>
@@ -502,10 +581,11 @@ export default function Hero() {
     );
   }
 
-  function RemovalHeroScreen() {
-    return (
-      // Added flex-1 and h-full so the entire removal screen takes up 100% of the parent's height
-      <div className="flex flex-col items-center w-full h-full flex-1 z-20 pt-8 pb-4 px-4 md:px-8 min-h-0">
+function RemovalHeroScreen() {
+  return (
+    <div
+      className="flex flex-col items-center w-full min-h-[100dvh]  flex-1 z-20 pt-4 sm:pt-6 pb-4 px-3 sm:px-6 md:px-8 min-h-0 "
+    >
         <OptionsBar />
         <CenterPreview />
         <ThumbnailStrip />
@@ -514,11 +594,10 @@ export default function Hero() {
   }
 
   return (
-    <section
-      // Added h-screen to strictly enforce viewport height
-      className="relative w-full min-h-[90vh] h-screen flex flex-col items-center text-[#eeeeee] overflow-hidden selection:bg-[#cb2957]/40"
-      {...getRootProps()}
-    >
+     <section
+        className="relative w-full min-h-dvh flex flex-col items-center text-[#eeeeee] overflow-hidden  selection:bg-[#cb2957]/40"
+        {...getRootProps()}
+      >
       <input {...getInputProps()} />
 
       {imageMap.size !== 0 ? <RemovalHeroScreen /> : <OriginalHero />}

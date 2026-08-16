@@ -1,10 +1,21 @@
 export default class Model {
   #session;
+  #ort;
 
-  constructor(session) {
+  constructor(session, ort) {
     this.#session = session;
-    this.originalHeight = null;
+    this.#ort = ort;
+
     this.originalWidth = null;
+    this.originalHeight = null;
+
+    // Preprocessing metadata.
+    // These are required to undo the padding later.
+    this.resizedWidth = null;
+    this.resizedHeight = null;
+    this.padX = null;
+    this.padY = null;
+    this.scale = null;
   }
 
   static async create(gpu = false) {
@@ -15,7 +26,9 @@ export default class Model {
       try {
         ort = await import("onnxruntime-web/webgpu");
         executionProviders = ["webgpu", "wasm"];
-      } catch {
+      } catch (error) {
+        console.warn("WebGPU unavailable, falling back to WASM:", error);
+
         ort = await import("onnxruntime-web");
         executionProviders = ["wasm"];
       }
@@ -29,58 +42,126 @@ export default class Model {
       graphOptimizationLevel: "all",
     });
 
-    return new Model(session);
+    console.log("ONNX Runtime execution providers:", executionProviders);
+
+    console.log("Model input names:", session.inputNames);
+
+    console.log("Model output names:", session.outputNames);
+
+    return new Model(session, ort);
   }
 
   async #loadImage(file) {
     const image = new Image();
     const objectUrl = URL.createObjectURL(file);
+
     try {
       image.src = objectUrl;
+
       await new Promise((resolve, reject) => {
         image.onload = resolve;
         image.onerror = reject;
       });
+
       return image;
     } finally {
       URL.revokeObjectURL(objectUrl);
     }
   }
 
-  // Draws image to a 1024x1024 canvas, returns Float32Array NCHW tensor, ImageNet-normalized
+  /*
+   * Preprocess:
+   *
+   * Original image
+   *      ↓
+   * Preserve aspect ratio
+   *      ↓
+   * Resize
+   *      ↓
+   * Center inside 1024×1024 canvas
+   *      ↓
+   * Padding
+   *      ↓
+   * ImageNet normalization
+   *      ↓
+   * CHW Float32 tensor
+   */
   #preprocess(image) {
+    const INPUT_SIZE = 1024;
+
     this.originalWidth = image.naturalWidth;
     this.originalHeight = image.naturalHeight;
 
+    const scale = Math.min(
+      INPUT_SIZE / this.originalWidth,
+      INPUT_SIZE / this.originalHeight,
+    );
+
+    const resizedWidth = Math.round(this.originalWidth * scale);
+    const resizedHeight = Math.round(this.originalHeight * scale);
+
+    const padX = Math.floor((INPUT_SIZE - resizedWidth) / 2);
+    const padY = Math.floor((INPUT_SIZE - resizedHeight) / 2);
+
+    this.scale = scale;
+    this.resizedWidth = resizedWidth;
+    this.resizedHeight = resizedHeight;
+    this.padX = padX;
+    this.padY = padY;
+
     const canvas = document.createElement("canvas");
-    canvas.width = 1024;
-    canvas.height = 1024;
-    const ctx = canvas.getContext("2d");
-    ctx.drawImage(image, 0, 0, 1024, 1024);
+    canvas.width = INPUT_SIZE;
+    canvas.height = INPUT_SIZE;
 
-    const { data } = ctx.getImageData(0, 0, 1024, 1024); // RGBA 0..255
+    const ctx = canvas.getContext("2d", {
+      willReadFrequently: true,
+    });
 
-    const size = 1024 * 1024;
-    const float32Data = new Float32Array(3 * size); // CHW
+    if (!ctx) {
+      throw new Error("Failed to create preprocessing context");
+    }
+
+    ctx.fillStyle = "rgb(127, 127, 127)";
+    ctx.fillRect(0, 0, INPUT_SIZE, INPUT_SIZE);
+
+    ctx.drawImage(
+      image,
+      0,
+      0,
+      this.originalWidth,
+      this.originalHeight,
+      padX,
+      padY,
+      resizedWidth,
+      resizedHeight,
+    );
+
+    const { data } = ctx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+
+    const size = INPUT_SIZE * INPUT_SIZE;
+
+    const float32Data = new Float32Array(3 * size);
 
     const mean = [0.485, 0.456, 0.406];
     const std = [0.229, 0.224, 0.225];
 
     for (let i = 0; i < size; i++) {
-      const r = data[i * 4] / 255;
-      const g = data[i * 4 + 1] / 255;
-      const b = data[i * 4 + 2] / 255;
+      const offset = i * 4;
+
+      const r = data[offset] / 255;
+      const g = data[offset + 1] / 255;
+      const b = data[offset + 2] / 255;
 
       float32Data[i] = (r - mean[0]) / std[0];
+
       float32Data[size + i] = (g - mean[1]) / std[1];
+
       float32Data[2 * size + i] = (b - mean[2]) / std[2];
     }
 
     return float32Data;
   }
 
-  // Call once after Model.create() if you need to inspect the real tensor names, e.g.:
-  // console.log(model.getIOInfo());
   getIOInfo() {
     return {
       inputNames: this.#session.inputNames,
@@ -88,128 +169,390 @@ export default class Model {
     };
   }
 
-  async #getmask(file) {
+  /*
+   * Run inference.
+   */
+  async #getMask(file) {
     const image = await this.#loadImage(file);
+
     const tensorData = this.#preprocess(image);
 
-    const ort = await import("onnxruntime-web");
-    const inputTensor = new ort.Tensor("float32", tensorData, [1, 3, 1024, 1024]);
+    const INPUT_SIZE = 1024;
 
-    // Read actual input/output names from the loaded model instead of hardcoding —
-    // these vary between export/quantization versions (e.g. "input" vs "input_image")
+    const inputTensor = new this.#ort.Tensor("float32", tensorData, [
+      1,
+      3,
+      INPUT_SIZE,
+      INPUT_SIZE,
+    ]);
+
     const inputName = this.#session.inputNames[0];
-    const outputName = this.#session.outputNames[this.#session.outputNames.length - 1];
 
-    const feeds = { [inputName]: inputTensor };
-    const outputs = await this.#session.run(feeds);
+    const outputName = this.#session.outputNames[0];
+
+    const outputs = await this.#session.run({
+      [inputName]: inputTensor,
+    });
+
     const output = outputs[outputName];
 
-    let min = Infinity;
-    let max = -Infinity;
-    for (let i = 0; i < output.data.length; i++) {
-      const v = output.data[i];
-      if (v < min) min = v;
-      if (v > max) max = v;
+    if (!output) {
+      throw new Error(`Model output "${outputName}" was not found`);
     }
 
-    return { logits: output.data, image, rawMin: min, rawMax: max };
+    return {
+      logits: output.data,
+      image,
+    };
   }
 
-  // Applies sigmoid to raw logits -> [0,1] probability mask
   #sigmoid(x) {
     return 1 / (1 + Math.exp(-x));
   }
 
-  // Resizes the 1024x1024 mask to original dimensions and applies it as alpha
-  #postprocess(logits, image, rawMin, rawMax) {
-    const { originalWidth: w, originalHeight: h } = this;
-
-    // If raw output already looks like it's in [0,1] (probabilities), don't
-    // sigmoid again — applying sigmoid to an already-squashed value produces
-    // a narrow, near-uniform band (~0.5-0.75) instead of a sharp mask.
-    const alreadyProbabilities = rawMin >= -0.01 && rawMax <= 1.01;
+  #createMaskCanvas(logits) {
+    const INPUT_SIZE = 1024;
 
     const maskCanvas = document.createElement("canvas");
-    maskCanvas.width = 1024;
-    maskCanvas.height = 1024;
-    const maskCtx = maskCanvas.getContext("2d");
-    const maskImageData = maskCtx.createImageData(1024, 1024);
 
-    for (let i = 0; i < logits.length; i++) {
-      const prob = alreadyProbabilities ? logits[i] : this.#sigmoid(logits[i]);
-      const v = Math.max(0, Math.min(1, prob)) * 255;
-      maskImageData.data[i * 4] = v;
-      maskImageData.data[i * 4 + 1] = v;
-      maskImageData.data[i * 4 + 2] = v;
-      maskImageData.data[i * 4 + 3] = 255;
+    maskCanvas.width = INPUT_SIZE;
+    maskCanvas.height = INPUT_SIZE;
+
+    const ctx = maskCanvas.getContext("2d");
+
+    if (!ctx) {
+      throw new Error("Failed to create mask canvas context");
     }
-    maskCtx.putImageData(maskImageData, 0, 0);
 
-    // Scale mask up to original size (bilinear, via canvas drawImage)
+    const imageData = ctx.createImageData(INPUT_SIZE, INPUT_SIZE);
+
+    const pixelCount = INPUT_SIZE * INPUT_SIZE;
+
+    if (logits.length < pixelCount) {
+      throw new Error(
+        `Unexpected output size: ${logits.length}. Expected at least ${pixelCount}.`,
+      );
+    }
+
+    for (let i = 0; i < pixelCount; i++) {
+      const probability = this.#sigmoid(logits[i]);
+
+      const value = Math.max(0, Math.min(255, probability * 255));
+
+      const offset = i * 4;
+
+      imageData.data[offset] = value;
+      imageData.data[offset + 1] = value;
+      imageData.data[offset + 2] = value;
+      imageData.data[offset + 3] = 255;
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+
+    return maskCanvas;
+  }
+
+  #removeMaskPadding(maskCanvas) {
+    const { resizedWidth, resizedHeight, padX, padY } = this;
+
+    const croppedMaskCanvas = document.createElement("canvas");
+
+    croppedMaskCanvas.width = resizedWidth;
+    croppedMaskCanvas.height = resizedHeight;
+
+    const ctx = croppedMaskCanvas.getContext("2d");
+
+    if (!ctx) {
+      throw new Error("Failed to create cropped mask context");
+    }
+
+    ctx.drawImage(
+      maskCanvas,
+      padX,
+      padY,
+      resizedWidth,
+      resizedHeight,
+      0,
+      0,
+      resizedWidth,
+      resizedHeight,
+    );
+
+    return croppedMaskCanvas;
+  }
+
+  #resizeMaskToOriginal(maskCanvas) {
+    const { originalWidth, originalHeight, resizedWidth, resizedHeight } =
+      this;
+
     const scaledMaskCanvas = document.createElement("canvas");
-    scaledMaskCanvas.width = w;
-    scaledMaskCanvas.height = h;
+
+    scaledMaskCanvas.width = originalWidth;
+    scaledMaskCanvas.height = originalHeight;
+
+    const ctx = scaledMaskCanvas.getContext("2d");
+
+    if (!ctx) {
+      throw new Error("Failed to create scaled mask context");
+    }
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+
+    ctx.drawImage(
+      maskCanvas,
+      0,
+      0,
+      resizedWidth,
+      resizedHeight,
+      0,
+      0,
+      originalWidth,
+      originalHeight,
+    );
+
+    return scaledMaskCanvas;
+  }
+
+  /*
+   * Find the tight bounding box of "meaningfully opaque" pixels
+   * in an RGBA buffer (alpha above a small threshold, to avoid
+   * including near-invisible anti-aliased mask fringe pixels).
+   * Returns null if nothing clears the threshold.
+   */
+  #computeAlphaBoundingBox(data, w, h, alphaThreshold = 8) {
+    let minX = w;
+    let minY = h;
+    let maxX = -1;
+    let maxY = -1;
+
+    for (let y = 0; y < h; y++) {
+      const rowOffset = y * w * 4;
+
+      for (let x = 0; x < w; x++) {
+        const alpha = data[rowOffset + x * 4 + 3];
+
+        if (alpha > alphaThreshold) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (maxX < minX || maxY < minY) {
+      return null;
+    }
+
+    return {
+      x: minX,
+      y: minY,
+      width: maxX - minX + 1,
+      height: maxY - minY + 1,
+    };
+  }
+
+  #postprocess(logits, image) {
+    const { originalWidth: w, originalHeight: h } = this;
+
+    const maskCanvas = this.#createMaskCanvas(logits);
+    const croppedMaskCanvas = this.#removeMaskPadding(maskCanvas);
+    const scaledMaskCanvas = this.#resizeMaskToOriginal(croppedMaskCanvas);
+
     const scaledMaskCtx = scaledMaskCanvas.getContext("2d");
-    scaledMaskCtx.drawImage(maskCanvas, 0, 0, w, h);
+
+    if (!scaledMaskCtx) {
+      throw new Error("Failed to read scaled mask context");
+    }
+
     const scaledMaskData = scaledMaskCtx.getImageData(0, 0, w, h).data;
 
-    // Draw original image at full size, punch alpha from the mask
-    const outCanvas = document.createElement("canvas");
-    outCanvas.width = w;
-    outCanvas.height = h;
-    const outCtx = outCanvas.getContext("2d");
-    outCtx.drawImage(image, 0, 0, w, h);
-    const outImageData = outCtx.getImageData(0, 0, w, h);
+    // Sanity check: if the mask has (almost) no contrast, applying
+    // it will produce a result indistinguishable from the original
+    // — i.e. exactly the "nothing got cropped" symptom. Surface
+    // that loudly instead of silently producing a full opaque image.
+    {
+      let minAlpha = 255;
+      let maxAlpha = 0;
+      for (let i = 0; i < scaledMaskData.length; i += 4) {
+        const v = scaledMaskData[i];
+        if (v < minAlpha) minAlpha = v;
+        if (v > maxAlpha) maxAlpha = v;
+      }
+      if (maxAlpha - minAlpha < 10) {
+        console.warn(
+          `[Model] Mask has almost no contrast (min=${minAlpha}, max=${maxAlpha}). ` +
+            "The model output may be inverted, empty, or misread — " +
+            "check rawMask/scaledMask via removeWithDebug().",
+        );
+      }
+    }
+
+    // Paint the full-size masked image first (subject visible,
+    // background transparent, canvas still w x h).
+    const fullCanvas = document.createElement("canvas");
+
+    fullCanvas.width = w;
+    fullCanvas.height = h;
+
+    const fullCtx = fullCanvas.getContext("2d", {
+      willReadFrequently: true,
+    });
+
+    if (!fullCtx) {
+      throw new Error("Failed to create output context");
+    }
+
+    fullCtx.drawImage(image, 0, 0, w, h);
+
+    const fullImageData = fullCtx.getImageData(0, 0, w, h);
 
     for (let i = 0; i < w * h; i++) {
-      outImageData.data[i * 4 + 3] = scaledMaskData[i * 4]; // alpha = mask value
+      fullImageData.data[i * 4 + 3] = scaledMaskData[i * 4];
     }
-    outCtx.putImageData(outImageData, 0, 0);
+
+    fullCtx.putImageData(fullImageData, 0, 0);
+
+    // Now actually crop: find the bounding box of the subject
+    // (non-transparent pixels) and trim the canvas down to it.
+    // Without this step the output stays the full original
+    // width/height with the subject floating inside a mostly
+    // transparent canvas — masked, but not cropped.
+    const bbox = this.#computeAlphaBoundingBox(fullImageData.data, w, h);
+
+    if (!bbox) {
+      // Nothing detected as foreground — return the full
+      // (fully transparent) canvas rather than throwing, so
+      // callers can decide how to handle an empty result.
+      return fullCanvas;
+    }
+
+    const outCanvas = document.createElement("canvas");
+
+    outCanvas.width = bbox.width;
+    outCanvas.height = bbox.height;
+
+    const outCtx = outCanvas.getContext("2d");
+
+    if (!outCtx) {
+      throw new Error("Failed to create cropped output context");
+    }
+
+    outCtx.drawImage(
+      fullCanvas,
+      bbox.x,
+      bbox.y,
+      bbox.width,
+      bbox.height,
+      0,
+      0,
+      bbox.width,
+      bbox.height,
+    );
 
     return outCanvas;
   }
 
-  // DEBUG: returns the raw 1024x1024 grayscale mask as a PNG blob, with no
-  // resizing or compositing — use this to check if the mask itself is a
-  // clean person-shaped blob or garbage, independent of postprocess bugs.
-  async debugMask(file) {
-    const { logits, rawMin, rawMax } = await this.#getmask(file);
-    const alreadyProbabilities = rawMin >= -0.01 && rawMax <= 1.01;
-
-    const canvas = document.createElement("canvas");
-    canvas.width = 1024;
-    canvas.height = 1024;
-    const ctx = canvas.getContext("2d");
-    const imageData = ctx.createImageData(1024, 1024);
-
-    for (let i = 0; i < logits.length; i++) {
-      const prob = alreadyProbabilities ? logits[i] : this.#sigmoid(logits[i]);
-      const v = Math.max(0, Math.min(1, prob)) * 255;
-      imageData.data[i * 4] = v;
-      imageData.data[i * 4 + 1] = v;
-      imageData.data[i * 4 + 2] = v;
-      imageData.data[i * 4 + 3] = 255;
-    }
-    ctx.putImageData(imageData, 0, 0);
-
+  #canvasToBlob(canvas) {
     return new Promise((resolve, reject) => {
       canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error("Failed to create debug mask blob"));
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error("Failed to create PNG blob"));
+        }
       }, "image/png");
     });
   }
 
-  // Returns a Blob (PNG with transparent background)
+  /*
+   * Public API. Returns the final cutout PNG blob.
+   */
   async remove(file) {
-    const { logits, image, rawMin, rawMax } = await this.#getmask(file);
-    const canvas = this.#postprocess(logits, image, rawMin, rawMax);
+    const { logits, image } = await this.#getMask(file);
 
-    return new Promise((resolve, reject) => {
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error("Failed to create output blob"));
-      }, "image/png");
-    });
+    const canvas = this.#postprocess(logits, image);
+
+    return this.#canvasToBlob(canvas);
+  }
+
+  /*
+   * Debug / testing API.
+   *
+   * Runs the exact same pipeline as remove(), but returns every
+   * intermediate stage as a PNG blob (plus the preprocessing
+   * metadata) instead of just the final cutout. Useful for anyone
+   * testing the model — render each stage in an <img> to see
+   * exactly where the pipeline breaks down.
+   *
+   * Usage:
+   *   const debug = await model.removeWithDebug(file);
+   *   img1.src = URL.createObjectURL(debug.original);
+   *   img2.src = URL.createObjectURL(debug.rawMask);
+   *   img3.src = URL.createObjectURL(debug.croppedMask);
+   *   img4.src = URL.createObjectURL(debug.scaledMask);
+   *   img5.src = URL.createObjectURL(debug.result);
+   *   console.log(debug.meta);
+   *
+   * Stages returned:
+   *   - original:     the source image, untouched, at its natural size
+   *   - rawMask:      1024x1024 grayscale mask straight off the model
+   *                   (still includes the gray padding border)
+   *   - croppedMask:  rawMask with the padding border removed
+   *                   (resizedWidth x resizedHeight)
+   *   - scaledMask:   croppedMask resized up to the original image's
+   *                   dimensions — this is what actually gets used
+   *                   as the alpha channel
+   *   - result:       final cutout (original image + alpha from
+   *                   scaledMask) — same as what remove() returns
+   *   - meta:         preprocessing metadata (scale, padding,
+   *                   resized/original dimensions)
+   */
+  async removeWithDebug(file) {
+    const { logits, image } = await this.#getMask(file);
+
+    const originalCanvas = document.createElement("canvas");
+    originalCanvas.width = this.originalWidth;
+    originalCanvas.height = this.originalHeight;
+    originalCanvas
+      .getContext("2d")
+      .drawImage(image, 0, 0, this.originalWidth, this.originalHeight);
+
+    const rawMaskCanvas = this.#createMaskCanvas(logits);
+    const croppedMaskCanvas = this.#removeMaskPadding(rawMaskCanvas);
+    const scaledMaskCanvas = this.#resizeMaskToOriginal(croppedMaskCanvas);
+    const resultCanvas = this.#postprocess(logits, image);
+
+    const [original, rawMask, croppedMask, scaledMask, result] =
+      await Promise.all([
+        this.#canvasToBlob(originalCanvas),
+        this.#canvasToBlob(rawMaskCanvas),
+        this.#canvasToBlob(croppedMaskCanvas),
+        this.#canvasToBlob(scaledMaskCanvas),
+        this.#canvasToBlob(resultCanvas),
+      ]);
+
+    return {
+      original,
+      rawMask,
+      croppedMask,
+      scaledMask,
+      result,
+      meta: {
+        originalWidth: this.originalWidth,
+        originalHeight: this.originalHeight,
+        resizedWidth: this.resizedWidth,
+        resizedHeight: this.resizedHeight,
+        padX: this.padX,
+        padY: this.padY,
+        scale: this.scale,
+        // Final cropped result's own dimensions — compare against
+        // originalWidth/originalHeight above to see how tight the
+        // bounding-box trim ended up.
+        resultWidth: resultCanvas.width,
+        resultHeight: resultCanvas.height,
+      },
+    };
   }
 }
