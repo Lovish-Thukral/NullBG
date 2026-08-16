@@ -1,21 +1,41 @@
-import { useState } from "react";
+import { useContext, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import logo from "../assets/logo.webp";
 import buymecoffee from "../assets/buymeacoffee.webp";
+import { ImageContext } from "../Context/ImageContext";
 
 function Navbar() {
   const [isOpen, setIsOpen] = useState(false);
+  const { clearImages } = useContext(ImageContext);
 
-  const navItems = ["Home", "Contact Us", "Feedback", "About Us"];
+  const navItems = [
+    { label: "Home", sectionId: "home" },
+    { label: "About Us", sectionId: "about-us" },
+    { label: "Contact Us", sectionId: "contact-us" },
+  ];
+
+  const handleNavClick = (item) => {
+    setIsOpen(false);
+
+    if (item.label === "Home") {
+      clearImages();
+    }
+
+    const section = document.getElementById(item.sectionId);
+    if (section) {
+      section.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
 
   return (
-    <nav className="sticky top-0 z-50 w-full h-max backdrop-blur-md border-b border-[#cb2957]/20 shadow-[0_4px_30px_-5px_rgba(203,41,87,0.3)]">
+    <nav className="fixed top-0 z-50 w-full h-max backdrop-blur-md border-b border-[#cb2957]/20 shadow-[0_4px_30px_-5px_rgba(203,41,87,0.3)]">
       <div className="max-w-7xl mx-auto px-6 md:px-8 lg:px-16 py-4 flex justify-between items-center">
         <motion.div
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.5 }}
           className="flex items-center cursor-pointer"
+          onClick={() => handleNavClick(navItems[0])}
         >
           <img
             src={logo}
@@ -31,18 +51,22 @@ function Navbar() {
           <ul className="flex space-x-10">
             {navItems.map((item, index) => (
               <motion.li
-                key={index}
+                key={item.sectionId}
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5, delay: index * 0.1 }}
                 whileHover={{ scale: 1.05 }}
+                onClick={() => handleNavClick(item)}
                 className="text-[#dddddd] font-semibold text-sm uppercase tracking-widest cursor-pointer transition-colors duration-300 hover:text-[#cb2957]"
               >
-                {item}
+                {item.label}
               </motion.li>
             ))}
           </ul>
-          <motion.div
+          <motion.a
+            href="https://www.buymeacoffee.com/lovishthukral"
+            target="_blank"
+            rel="noreferrer"
             whileHover={{
               rotate: [-15, 15, -15],
               transition: {
@@ -53,21 +77,29 @@ function Navbar() {
             }}
             animate={{ rotate: 0 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
+            className="inline-flex"
           >
             <img
               src={buymecoffee}
               alt="buymeacoffee"
               className="h-8 brightness-125"
             />
-          </motion.div>
+          </motion.a>
         </div>
 
         <div className="md:hidden flex items-center">
-          <img
-            src={buymecoffee}
-            alt="buymeacoffee"
-            className="w-7 mr-6 cursor-pointer hover:scale-110 brightness-125"
-          />
+          <a
+            href="https://www.buymeacoffee.com/lovishthukral"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex"
+          >
+            <img
+              src={buymecoffee}
+              alt="buymeacoffee"
+              className="w-7 mr-6 cursor-pointer hover:scale-110 brightness-125"
+            />
+          </a>
           <button
             onClick={() => setIsOpen(!isOpen)}
             className="text-[#eeeeee] focus:outline-none"
@@ -111,15 +143,15 @@ function Navbar() {
             <ul className="flex flex-col items-center py-6 space-y-6">
               {navItems.map((item, index) => (
                 <motion.li
-                  key={index}
+                  key={item.sectionId}
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ duration: 0.3, delay: index * 0.1 }}
                   whileHover={{ scale: 1.1 }}
-                  onClick={() => setIsOpen(false)}
+                  onClick={() => handleNavClick(item)}
                   className="text-[#dddddd] bg-[#000000]/95 font-semibold text-lg uppercase tracking-widest cursor-pointer hover:text-[#cb2957] transition-colors duration-300 border-b border-white"
                 >
-                  {item}
+                  {item.label}
                 </motion.li>
               ))}
             </ul>

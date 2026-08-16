@@ -49,8 +49,6 @@ export default function ImageProvider({ children }) {
 
       if (!image) return prev;
 
-      // revoke any previous result URL before creating a new one, so we
-      // don't leak blob URLs if this image gets reprocessed
       if (image.resultUrl) {
         URL.revokeObjectURL(image.resultUrl);
       }
@@ -68,13 +66,29 @@ export default function ImageProvider({ children }) {
     });
   };
 
+  const clearImages = () => {
+    setImageMap((prev) => {
+      prev.forEach((image) => {
+        if (image.preview) {
+          URL.revokeObjectURL(image.preview);
+        }
+        if (image.resultUrl) {
+          URL.revokeObjectURL(image.resultUrl);
+        }
+      });
+
+      return new Map();
+    });
+  };
+
   return (
     <ImageContext.Provider
       value={{
-        imageMap: imageMap,
-        addImage: addImage,
-        removeImage: removeImage,
-        updateImageStatus: updateImageStatus,
+        imageMap,
+        addImage,
+        removeImage,
+        updateImageStatus,
+        clearImages,
       }}
     >
       {children}
